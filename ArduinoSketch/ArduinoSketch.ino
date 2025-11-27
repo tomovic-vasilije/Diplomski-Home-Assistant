@@ -8,33 +8,43 @@
 #include "secrets.h"
 #include "consts.h"
 
+// ------------------------ Globalne promenljive ------------------------
+
 MKRIoTCarrier carrier;
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
 
+// Stanje alarma i ekran stranice (TEMP/HUM/PRESS)
 AlarmState alarmState = ARMED;
 EnvPage currentPage = PAGE_TEMP;
 
+// ENV sampling
 unsigned long lastEnvSampleTime = 0;
 bool normalStateJustEntered = false;
 
+// IMU (žiroskop)
 float Gx, Gy, Gz;
 
+// Auth countdown (tajmer, beep, prikaz)
 unsigned long authStartTime = 0;
 int lastDisplayedSeconds = -1;
 unsigned long lastBeepTime = 0;
 
-int8_t currentUserIndex = -1;
-const char* currentUserId = NULL;
+// Informacije o korisniku (PIN)
+int8_t currentUserIndex = -1;     // -1 znači: nijedan user
+const char* currentUserId = NULL; // pokazivač na USER_IDS[x]
 
+// Trenutno unet PIN (do 4 cifre)
 uint8_t enteredPin[PIN_LENGTH];
 uint8_t enteredLength = 0;
 
+// Broj neuspešnih pokušaja PIN-a
 uint8_t failedAttempts = 0;
 
+// Boje za LED traku
 uint32_t colorRed, colorGreen, colorBlue, colorBlack;
 
-// --- melodije ---
+// ------------------------ Melodije (note + trajanje) ------------------------
 
 const uint16_t successMelody[] = {
   NOTE_E6, NOTE_G6, NOTE_C7, NOTE_G6
@@ -56,8 +66,11 @@ const uint8_t errorDurations[] = {
 
 const uint8_t ERROR_MELODY_LEN = sizeof(errorMelody) / sizeof(errorMelody[0]);
 
-// ------------------------ Audio helperi ------------------------
+// ======================================================================
+//                            AUDIO HELPERI
+// ======================================================================
 
+// Puštanje melodije (uspeh/greška)
 void playMelody(const uint16_t *melody, const uint8_t *durations, uint8_t length) {
   for (uint8_t i = 0; i < length; i++) {
     uint16_t noteDuration = 1000 / durations[i];
@@ -74,7 +87,7 @@ void playMelody(const uint16_t *melody, const uint8_t *durations, uint8_t length
   }
 }
 
-// kratak beep za odbrojavanje
+// Kratak beep za odbrojavanje (svake sekunde u AUTH_COUNTDOWN)
 void playShortCountdownBeep() {
   uint16_t noteDuration = 1000 / 16;   // šesnaestinka
   carrier.Buzzer.sound(NOTE_A6);
@@ -84,8 +97,147 @@ void playShortCountdownBeep() {
   carrier.Buzzer.noSound();
 }
 
-// ------------------------ Helperi za IMU / stanja ------------------------
+// ======================================================================
+//                        MQTT + JSON HELPERI
+// ======================================================================
 
+// Helper koji JSON i ispiše na Serial i pošalje na MQTT
+void publishJsonToMqtt(const char* topic, StaticJsonDocument<256>& doc) {
+  Serial.print("MQTT PUBLISH [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+
+  mqttClient.beginMessage(topic);
+  serializeJson(doc, mqttClient);
+  mqttClient.endMessage();
+}
+
+// Slanje senzor podataka na DATA topic (NORMAL stanje)
+void publishSensorData(float temperature, float humidity, float pressure) {
+  StaticJsonDocument<256> doc;
+
+  doc["sensor_name"] = SENSOR_NAME;
+  doc["house_id"] = HOUSE_ID;
+
+  if (currentUserId != NULL) {
+    doc["user_id"] = currentUserId;
+  } else {
+    doc["user_id"] = nullptr; // JSON null
+  }
+
+  doc["state"] = "NORMAL";
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["pressure"] = pressure;
+  doc["millis"] = millis();
+
+  publishJsonToMqtt(MQTT_TOPIC_DATA, doc);
+}
+
+// Popunjavanje zajedničkih polja za EVENT JSON
+void fillCommonEvent(StaticJsonDocument<256>& doc, const char* eventType) {
+  doc["sensor_name"] = SENSOR_NAME;
+  doc["house_id"] = HOUSE_ID;
+
+  if (currentUserId != NULL) {
+    doc["user_id"] = currentUserId;
+  } else {
+    doc["user_id"] = nullptr;
+  }
+
+  doc["event_type"] = eventType;
+  doc["millis"] = millis();
+}
+
+// --------------- Pojedinačni event publish-eri ----------------
+
+// Pokret detektovan u ARMED → prelaz u AUTH_COUNTDOWN
+void publishEventMotionDetectedArmed() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "MOTION_DETECTED_ARMED");
+
+  doc["prev_state"] = "ARMED";
+  doc["new_state"] = "AUTH_COUNTDOWN";
+  doc["reason"] = "IMU_MOVEMENT";
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Uspešna autentifikacija PIN-om → NORMAL
+void publishEventAuthSuccess() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "AUTH_SUCCESS");
+
+  doc["prev_state"] = "AUTH_COUNTDOWN";
+  doc["new_state"] = "NORMAL";
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Neuspešan PIN pokušaj (ali još nismo u INTRUDER)
+void publishEventAuthFailed() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "AUTH_FAILED");
+
+  doc["state"] = "AUTH_COUNTDOWN";
+  doc["failed_attempts"] = failedAttempts;
+  doc["max_attempts"] = MAX_FAILED_ATTEMPTS;
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Dostignut maksimum neuspešnih pokušaja → prelaz u INTRUDER
+void publishEventAuthMaxFailed() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "AUTH_MAX_FAILED");
+
+  doc["prev_state"] = "AUTH_COUNTDOWN";
+  doc["new_state"] = "INTRUDER";
+  doc["failed_attempts"] = failedAttempts;
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Istekao AUTH countdown → INTRUDER
+void publishEventAuthTimeout() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "AUTH_TIMEOUT");
+
+  doc["prev_state"] = "AUTH_COUNTDOWN";
+  doc["new_state"] = "INTRUDER";
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Ušli smo u INTRUDER stanje (generalni event)
+void publishEventIntruderAlarm() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "INTRUDER_ALARM");
+
+  doc["state"] = "INTRUDER";
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// Gesture DOWN iz NORMAL → ARMED (zaključavanje kuće od strane usera)
+void publishEventArmedByUser() {
+  StaticJsonDocument<256> doc;
+  fillCommonEvent(doc, "ARMED_BY_USER");
+
+  doc["prev_state"] = "NORMAL";
+  doc["new_state"] = "ARMED";
+  doc["reason"] = "GESTURE_DOWN";
+
+  publishJsonToMqtt(MQTT_TOPIC_EVENTS, doc);
+}
+
+// ======================================================================
+//                    HELPERI ZA IMU I EKRAN STANJA
+// ======================================================================
+
+// Detekcija pokreta preko žiroskopa
 bool detectMovement() {
   carrier.IMUmodule.readGyroscope(Gx, Gy, Gz);
 
@@ -107,6 +259,7 @@ bool detectMovement() {
   return false;
 }
 
+// Ekran za ARMED stanje
 void drawArmedScreen() {
   carrier.display.fillScreen(ST77XX_BLACK);
   carrier.display.setTextColor(ST77XX_WHITE);
@@ -119,6 +272,7 @@ void drawArmedScreen() {
   carrier.leds.show();
 }
 
+// Ekran za NORMAL stanje (kratak blink zelenim)
 void drawNormalScreen() {
   carrier.display.fillScreen(ST77XX_BLACK);
   carrier.display.setTextColor(ST77XX_WHITE);
@@ -137,6 +291,7 @@ void drawNormalScreen() {
   }
 }
 
+// Ekran za INTRUDER stanje
 void drawIntruderScreen() {
   carrier.display.fillScreen(ST77XX_BLACK);
   carrier.display.setTextColor(ST77XX_RED);
@@ -147,6 +302,7 @@ void drawIntruderScreen() {
   carrier.display.print("DETECTED!");
 }
 
+// Prelazak u AUTH_COUNTDOWN stanje
 void startAuthCountdown() {
   alarmState = AUTH_COUNTDOWN;
   authStartTime = millis();
@@ -165,7 +321,11 @@ void startAuthCountdown() {
   carrier.display.fillScreen(ST77XX_BLACK);
 }
 
-// ------------------------ PIN logika ------------------------
+// ======================================================================
+//                          PIN LOGIKA
+// ======================================================================
+
+// Traži user-a čiji PIN se poklapa sa unetim
 int8_t findUserIndexForPin(const uint8_t pinDigits[PIN_LENGTH]) {
   for (uint8_t userIdx = 0; userIdx < USER_COUNT; userIdx++) {
     bool match = true;
@@ -182,6 +342,7 @@ int8_t findUserIndexForPin(const uint8_t pinDigits[PIN_LENGTH]) {
   return -1;                    // nijedan se ne poklapa
 }
 
+// Dodaj jednu cifru u PIN i proveri kada ima 4 cifre
 void addDigit(uint8_t d) {
   if (enteredLength >= PIN_LENGTH) return;
 
@@ -195,9 +356,7 @@ void addDigit(uint8_t d) {
   Serial.println(")");
 
   if (enteredLength == PIN_LENGTH) {
-    // pokušaj da nađeš korisnika za ovaj PIN
     int8_t userIdx = findUserIndexForPin(enteredPin);
-    delay(1000);
 
     if (userIdx >= 0) {
       // uspešna autentifikacija
@@ -210,6 +369,8 @@ void addDigit(uint8_t d) {
       Serial.print(", id=");
       Serial.println(currentUserId);
 
+      publishEventAuthSuccess();           // MQTT event AUTH_SUCCESS
+
       alarmState = NORMAL;
       normalStateJustEntered = true;
       carrier.Buzzer.noSound();
@@ -220,6 +381,8 @@ void addDigit(uint8_t d) {
       Serial.println("PIN pogresan!");
       failedAttempts++;
 
+      publishEventAuthFailed();            // MQTT event AUTH_FAILED
+
       playMelody(errorMelody, errorDurations, ERROR_MELODY_LEN);
 
       Serial.print("Broj neuspesnih pokusaja: ");
@@ -227,6 +390,10 @@ void addDigit(uint8_t d) {
 
       if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
         Serial.println("Previse pogresnih pokusaja -> INTRUDER!");
+
+        publishEventAuthMaxFailed();       // MQTT event AUTH_MAX_FAILED
+        publishEventIntruderAlarm();       // MQTT event INTRUDER_ALARM
+
         alarmState = INTRUDER;
         drawIntruderScreen();
       }
@@ -236,6 +403,7 @@ void addDigit(uint8_t d) {
   }
 }
 
+// Update AUTH_COUNTDOWN ekrana (odbrojavanje + beep + PIN zvezdice)
 void updateAuthCountdown() {
   unsigned long now = millis();
 
@@ -246,18 +414,24 @@ void updateAuthCountdown() {
     return;
   }
 
+  // Countdown istekao → INTRUDER
   if (remaining <= 0 && alarmState == AUTH_COUNTDOWN) {
+    publishEventAuthTimeout();     // MQTT AUTH_TIMEOUT
+    publishEventIntruderAlarm();   // MQTT INTRUDER_ALARM
+
     alarmState = INTRUDER;
     Serial.println("Isteklo vreme -> INTRUDER");
     drawIntruderScreen();
     return;
   }
 
+  // Svake sekunde beep
   if (now - lastBeepTime >= 1000) {
     lastBeepTime = now;
     playShortCountdownBeep();
   }
 
+  // Osvežavanje prikaza samo kad se promeni broj sekundi
   if (remaining != lastDisplayedSeconds) {
     lastDisplayedSeconds = remaining;
 
@@ -281,6 +455,7 @@ void updateAuthCountdown() {
     carrier.display.print(MAX_FAILED_ATTEMPTS - failedAttempts);
   }
 
+  // Čitanje touch dugmića za unos PIN-a
   carrier.Buttons.update();
 
   if (carrier.Buttons.onTouchDown(TOUCH0)) {
@@ -300,7 +475,9 @@ void updateAuthCountdown() {
   }
 }
 
-// ------------------------ INTRUDER alarm ------------------------
+// ======================================================================
+//                     INTRUDER ALARM (blink + sirena)
+// ======================================================================
 
 void updateIntruderAlarm() {
   static bool ledsOn = false;
@@ -323,7 +500,9 @@ void updateIntruderAlarm() {
   }
 }
 
-// ------------------------ ENV ekran: static deo + value deo ------------------------
+// ======================================================================
+//             ENV EKRAN: STATIC (logo + naslov) + VALUE (broj)
+// ======================================================================
 
 // TEMP
 
@@ -338,7 +517,7 @@ void drawTemperatureStatic() {
 }
 
 void drawTemperatureValue(int16_t tempInt) {
-  // obriši samo donji deo
+  // obriši samo donji deo (gde piše broj + C)
   carrier.display.fillRect(40, 170, 200, 60, ST77XX_BLACK);
 
   carrier.display.setTextSize(3);
@@ -393,8 +572,7 @@ void drawPressureValue(int16_t pressInt) {
   carrier.display.print("kPa");
 }
 
-// helperi za izbor stranice
-
+// Izbor statičke strane na osnovu currentPage
 void drawEnvStaticPage(EnvPage page) {
   switch (page) {
     case PAGE_TEMP:
@@ -409,6 +587,7 @@ void drawEnvStaticPage(EnvPage page) {
   }
 }
 
+// Izbor value dela na osnovu currentPage
 void drawEnvValue(EnvPage page, int16_t tempInt, int16_t humInt, int16_t pressInt) {
   switch (page) {
     case PAGE_TEMP:
@@ -423,22 +602,9 @@ void drawEnvValue(EnvPage page, int16_t tempInt, int16_t humInt, int16_t pressIn
   }
 }
 
-// ------------------------ Logovanje ENV u JSON ------------------------
-
-void logEnvToSerial(float temperature, float humidity, float pressure) {
-  StaticJsonDocument<256> doc;
-
-  doc["state"] = "NORMAL";
-  doc["temperature"] = temperature;
-  doc["humidity"] = humidity;
-  doc["pressure"] = pressure;
-  doc["millis"] = millis();  // opcionalno, vreme rada
-
-  serializeJson(doc, Serial);
-  Serial.println(); // novi red
-}
-
-// ------------------------ NORMAL stanje: merenje + gestovi ------------------------
+// ======================================================================
+//                 NORMAL STANJE: merenje + gestovi
+// ======================================================================
 
 void handleNormalState() {
 
@@ -455,12 +621,13 @@ void handleNormalState() {
     lastHum   = carrier.Env.readHumidity();
     lastPress = carrier.Pressure.readPressure();
 
-    // float za log, int za prikaz
+    // float za log / MQTT, int za prikaz
     tempInt  = (int16_t)roundf(lastTemp);
     humInt   = (int16_t)roundf(lastHum);
     pressInt = (int16_t)roundf(lastPress);
 
-    logEnvToSerial(lastTemp, lastHum, lastPress);
+    // Slanje na MQTT DATA topic + ispis JSON-a u Serial
+    publishSensorData(lastTemp, lastHum, lastPress);
 
     drawEnvStaticPage(currentPage);
     drawEnvValue(currentPage, tempInt, humInt, pressInt);
@@ -477,7 +644,8 @@ void handleNormalState() {
     lastHum   = carrier.Env.readHumidity();
     lastPress = carrier.Pressure.readPressure();
 
-    logEnvToSerial(lastTemp, lastHum, lastPress);
+    // Ponovo slanje na MQTT DATA topic + Serial
+    publishSensorData(lastTemp, lastHum, lastPress);
 
     int16_t newTempInt  = (int16_t)roundf(lastTemp);
     int16_t newHumInt   = (int16_t)roundf(lastHum);
@@ -504,7 +672,7 @@ void handleNormalState() {
     }
   }
 
-  // čitanje gestova LEFT/RIGHT za promenu stranice
+  // čitanje gestova LEFT/RIGHT/DOWN
   if (carrier.Light.gestureAvailable()) {
     uint8_t gesture = carrier.Light.readGesture();
 
@@ -531,6 +699,10 @@ void handleNormalState() {
     else if (gesture == DOWN) {
       Serial.println("Gesture DOWN -> ARMED");
 
+      // pošalji event ko je "zaključao" kuću
+      publishEventArmedByUser();
+
+      // resetuj trenutnog user-a
       currentUserIndex = -1;
       currentUserId = NULL;
 
@@ -545,7 +717,9 @@ void handleNormalState() {
   delay(50);
 }
 
-// ------------------------ setup / loop ------------------------
+// ======================================================================
+//                           setup / loop
+// ======================================================================
 
 void setup() {
   Serial.begin(9600);
@@ -596,10 +770,18 @@ void setup() {
 }
 
 void loop() {
+  // Održava MQTT konekciju (ping, keep-alive)
+  mqttClient.poll();
+
   switch (alarmState) {
     case ARMED:
       if (detectMovement()) {
+        // imamo pokret → šaljemo event + ulazimo u AUTH_COUNTDOWN
+        publishEventMotionDetectedArmed();
         startAuthCountdown();
+      } else {
+        // nema pokreta: mali delay da ne vrti loop prebrzo
+        delay(20);
       }
       break;
 
