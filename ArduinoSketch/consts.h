@@ -2,6 +2,7 @@ const char MQTT_TOPIC_DATA[] = "home/house_1/sensor/data";
 const char MQTT_TOPIC_EVENTS[] = "home/house_1/security/events";
 const char MQTT_TOPIC_COMMANDS[] = "home/house_1/commands";
 const char SENSOR_NAME[] = "MKR1010_WiFi";
+const char HOUSE_ID[]   = "house_1";
 
 enum AlarmState {
   ARMED,
@@ -18,8 +19,20 @@ enum EnvPage {
 
 const float GYRO_THRESHOLD = 50.0f;
 
+const uint8_t USER_COUNT = 3;
 const uint8_t PIN_LENGTH = 4;
-const uint8_t CORRECT_PIN[PIN_LENGTH] = {0, 1, 2, 3};
+
+const char USER_IDS[USER_COUNT][10] = {
+  "owner_kid",
+  "owner_mom",
+  "owner_dad"
+};
+
+const uint8_t USER_PINS[USER_COUNT][PIN_LENGTH] = {
+  {0, 1, 2, 3},
+  {0, 2, 0, 2},
+  {4, 3, 2, 1}
+};
 
 const uint8_t MAX_FAILED_ATTEMPTS = 3;
 

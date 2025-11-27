@@ -24,6 +24,9 @@ unsigned long authStartTime = 0;
 int lastDisplayedSeconds = -1;
 unsigned long lastBeepTime = 0;
 
+int8_t currentUserIndex = -1;
+const char* currentUserId = NULL;
+
 uint8_t enteredPin[PIN_LENGTH];
 uint8_t enteredLength = 0;
 
@@ -151,6 +154,8 @@ void startAuthCountdown() {
   lastBeepTime = 0;
   enteredLength = 0;
   failedAttempts = 0;
+  currentUserIndex = -1;
+  currentUserId = NULL;
 
   Serial.println("Prelaz u AUTH_COUNTDOWN");
 
@@ -161,6 +166,21 @@ void startAuthCountdown() {
 }
 
 // ------------------------ PIN logika ------------------------
+int8_t findUserIndexForPin(const uint8_t pinDigits[PIN_LENGTH]) {
+  for (uint8_t userIdx = 0; userIdx < USER_COUNT; userIdx++) {
+    bool match = true;
+    for (uint8_t i = 0; i < PIN_LENGTH; i++) {
+      if (pinDigits[i] != USER_PINS[userIdx][i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return (int8_t)userIdx;   // našli smo user-a
+    }
+  }
+  return -1;                    // nijedan se ne poklapa
+}
 
 void addDigit(uint8_t d) {
   if (enteredLength >= PIN_LENGTH) return;
@@ -175,29 +195,35 @@ void addDigit(uint8_t d) {
   Serial.println(")");
 
   if (enteredLength == PIN_LENGTH) {
-    // da bi korisnik video i četvrtu zvezdicu
-    delay(750);
+    // pokušaj da nađeš korisnika za ovaj PIN
+    int8_t userIdx = findUserIndexForPin(enteredPin);
+    delay(1000);
 
-    bool ok = true;
-    for (uint8_t i = 0; i < PIN_LENGTH; i++) {
-      if (enteredPin[i] != CORRECT_PIN[i]) {
-        ok = false;
-        break;
-      }
-    }
+    if (userIdx >= 0) {
+      // uspešna autentifikacija
+      currentUserIndex = userIdx;
+      currentUserId = USER_IDS[userIdx];   // pokazivač na string u USER_IDS tabeli
 
-    if (ok) {
-      Serial.println("PIN tacan -> NORMAL stanje");
+      Serial.print("PIN tacan -> NORMAL stanje, korisnik: ");
+      Serial.print("index=");
+      Serial.print(currentUserIndex);
+      Serial.print(", id=");
+      Serial.println(currentUserId);
+
       alarmState = NORMAL;
       normalStateJustEntered = true;
       carrier.Buzzer.noSound();
       playMelody(successMelody, successDurations, SUCCESS_MELODY_LEN);
       drawNormalScreen();
     } else {
+      // nijedan user nema ovaj PIN
       Serial.println("PIN pogresan!");
       failedAttempts++;
 
       playMelody(errorMelody, errorDurations, ERROR_MELODY_LEN);
+
+      Serial.print("Broj neuspesnih pokusaja: ");
+      Serial.println(failedAttempts);
 
       if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
         Serial.println("Previse pogresnih pokusaja -> INTRUDER!");
@@ -504,6 +530,10 @@ void handleNormalState() {
     }
     else if (gesture == DOWN) {
       Serial.println("Gesture DOWN -> ARMED");
+
+      currentUserIndex = -1;
+      currentUserId = NULL;
+
       alarmState = ARMED;
       drawArmedScreen();
       // pošto smo promenili stanje, nema više posla u NORMAL u ovoj iteraciji
