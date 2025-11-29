@@ -58,52 +58,51 @@ services:
       - "9081:9081"
     depends_on:
       - mosquitto
-  # gatewayservice:
-  #   build:
-  #     context: ./SensorGatewayService
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     - MQTT_HOST=mosquitto
-  #     - NATS_SERVER=nats://nats:4222
-  #   container_name: sensor-gateway-service
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - mosquitto
-  #     - nats
 
-  # storageservice:
-  #   build:
-  #     context: ./StorageService
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     - NATS_SERVER=nats://nats:4222
-  #     - MONGO_URL=mongodb://mongoadmin:Vasamare123@mongo:27017/
-  #   container_name: storage-service
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - nats
-  #     - mongo
-  #   ports:
-  #     - "4000:4000"
+  gatewayservice:
+    build:
+      context: ./SensorGatewayService
+      dockerfile: Dockerfile
+    env_file:
+      - ./SensorGatewayService/.env
+    environment:
+      - MQTT_HOST=mosquitto
+      - NATS_SERVER=nats://nats:4222
+    container_name: sensor-gateway-service
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+      - nats
 
-  # commandservice:
-  #   build:
-  #     context: ./CommandService
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - Mqtt__Host=mosquitto
-  #     - Mongo__ConnectionString=mongodb://mongoadmin:Vasamare123@mongo:27017/
-  #   container_name: command-service
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - mosquitto
-  #     - mongo
-  #   ports:
-  #     - "5000:8080"
+  storageservice:
+    build:
+      context: ./StorageService
+      dockerfile: Dockerfile
+    env_file:
+      - ./StorageService/.env
+    environment:
+      - NATS_SERVER=nats://nats:4222
+      - MONGO_URL=mongodb://mongoadmin:Vasamare123@mongo:27017/
+    container_name: storage-service
+    restart: unless-stopped
+    depends_on:
+      - nats
+      - mongo
+    ports:
+      - "4000:4000"
+
+  commandservice:
+    build:
+      context: ./CommandService
+      dockerfile: Dockerfile
+    environment:
+      - Mqtt__Host=mosquitto
+      - Mongo__ConnectionString=mongodb://mongoadmin:Vasamare123@mongo:27017/
+    container_name: command-service-home-assistant
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+      - mongo
 
 volumes:
   mongo-data:

@@ -14,6 +14,8 @@ MKRIoTCarrier carrier;
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
 
+void onMqttMessage(int messageSize);
+
 // Stanje alarma i ekran stranice (TEMP/HUM/PRESS)
 AlarmState alarmState = ARMED;
 EnvPage currentPage = PAGE_TEMP;
@@ -33,6 +35,11 @@ unsigned long lastBeepTime = 0;
 // Informacije o korisniku (PIN)
 int8_t currentUserIndex = -1;     // -1 znači: nijedan user
 const char* currentUserId = NULL; // pokazivač na USER_IDS[x]
+
+// Overlay za prikaz komandi sa actuators topica
+bool actuatorOverlayActive = false;
+unsigned long actuatorOverlayStart = 0;
+char actuatorOverlayText[16];   // npr. "AC ON", "HUM OFF", "WND ON"
 
 // Trenutno unet PIN (do 4 cifre)
 uint8_t enteredPin[PIN_LENGTH];
@@ -272,25 +279,6 @@ void drawArmedScreen() {
   carrier.leds.show();
 }
 
-// Ekran za NORMAL stanje (kratak blink zelenim)
-void drawNormalScreen() {
-  carrier.display.fillScreen(ST77XX_BLACK);
-  carrier.display.setTextColor(ST77XX_WHITE);
-  carrier.display.setTextSize(3);
-  carrier.display.setCursor(50, 90);
-  carrier.display.print("NORMAL");
-
-  // 3 puta zablinka zeleno pa se ugasi
-  for (uint8_t i = 0; i < 3; i++) {
-    carrier.leds.fill(colorGreen, 0, 5);
-    carrier.leds.show();
-    delay(250);
-    carrier.leds.fill(colorBlack, 0, 5);
-    carrier.leds.show();
-    delay(250);
-  }
-}
-
 // Ekran za INTRUDER stanje
 void drawIntruderScreen() {
   carrier.display.fillScreen(ST77XX_BLACK);
@@ -319,6 +307,35 @@ void startAuthCountdown() {
   carrier.leds.show();
 
   carrier.display.fillScreen(ST77XX_BLACK);
+}
+
+void showWelcomeScreen() {
+  if (currentUserIndex < 0 || currentUserIndex >= USER_COUNT) return;
+
+  carrier.display.fillScreen(ST77XX_BLACK);
+  carrier.display.setTextColor(ST77XX_WHITE);
+  carrier.display.setTextSize(3);
+
+  carrier.display.setCursor(20, 80);
+  carrier.display.print("WELCOME");
+
+  carrier.display.setCursor(40, 120);
+  carrier.display.print(USER_DISPLAY_NAMES[currentUserIndex]);
+
+  // 3 puta zablinka zeleno pa se ugasi
+  for (uint8_t i = 0; i < 3; i++) {
+    carrier.leds.fill(colorGreen, 0, 5);
+    carrier.leds.show();
+    delay(250);
+    carrier.leds.fill(colorBlack, 0, 5);
+    carrier.leds.show();
+    delay(250);
+  }
+
+  delay(2000);  // ~2 sekunde welcome
+
+  carrier.leds.fill(colorBlack, 0, 5);
+  carrier.leds.show();
 }
 
 // ======================================================================
@@ -375,7 +392,8 @@ void addDigit(uint8_t d) {
       normalStateJustEntered = true;
       carrier.Buzzer.noSound();
       playMelody(successMelody, successDurations, SUCCESS_MELODY_LEN);
-      drawNormalScreen();
+
+      showWelcomeScreen();
     } else {
       // nijedan user nema ovaj PIN
       Serial.println("PIN pogresan!");
@@ -602,6 +620,55 @@ void drawEnvValue(EnvPage page, int16_t tempInt, int16_t humInt, int16_t pressIn
   }
 }
 
+void showActuatorOverlay(const char* text) {
+  // upamti tekst
+  strncpy(actuatorOverlayText, text, sizeof(actuatorOverlayText) - 1);
+  actuatorOverlayText[sizeof(actuatorOverlayText) - 1] = '\0';
+
+  actuatorOverlayActive = true;
+  actuatorOverlayStart = millis();
+
+  // ekran
+  carrier.display.fillScreen(ST77XX_BLACK);
+  carrier.display.setTextColor(ST77XX_WHITE);
+  carrier.display.setTextSize(4);
+  carrier.display.setCursor(40, 90);
+  carrier.display.print(actuatorOverlayText);
+
+  // plava LED traka dok prikaz traje
+  carrier.leds.fill(colorBlue, 0, 5);
+  carrier.leds.show();
+}
+
+void updateActuatorOverlay() {
+  if (!actuatorOverlayActive) return;
+
+  if (millis() - actuatorOverlayStart >= 3000UL) {  // 3 sekunde
+    actuatorOverlayActive = false;
+
+    // ugasi plavu traku
+    carrier.leds.fill(colorBlack, 0, 5);
+    carrier.leds.show();
+
+    // vrati se na "normalan" prikaz, zavisi od stanja
+    switch (alarmState) {
+      case ARMED:
+        drawArmedScreen();
+        break;
+      case AUTH_COUNTDOWN:
+        // countdown ekran će se osvežiti u updateAuthCountdown()
+        break;
+      case NORMAL:
+        // neka NORMAL izgradi env ekran ispočetka
+        normalStateJustEntered = true;
+        break;
+      case INTRUDER:
+        drawIntruderScreen();
+        break;
+    }
+  }
+}
+
 // ======================================================================
 //                 NORMAL STANJE: merenje + gestovi
 // ======================================================================
@@ -721,6 +788,68 @@ void handleNormalState() {
 //                           setup / loop
 // ======================================================================
 
+void onMqttMessage(int messageSize) {
+  String topic = mqttClient.messageTopic();
+
+  Serial.print("MQTT IN [");
+  Serial.print(topic);
+  Serial.print("] bytes=");
+  Serial.println(messageSize);
+
+  String payload;
+  while (mqttClient.available()) {
+    char c = (char)mqttClient.read();
+    payload += c;
+  }
+  Serial.print("Payload: ");
+  Serial.println(payload);
+
+  // Zanima nas samo actuators topic
+  if (topic != MQTT_TOPIC_ACTUATORS) {
+    return;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.print("Actuator JSON parse error: ");
+    Serial.println(err.c_str());
+    return;
+  }
+
+  const char* device = doc["device"];          // "AC", "HUMIDIFIER", "VENT_FAN"
+  const char* desired = doc["desired_state"];  // "ON" / "OFF"
+
+  if (!device || !desired) {
+    Serial.println("Actuator message missing device/desired_state");
+    return;
+  }
+
+  char text[16] = "";
+
+  if (strcmp(device, "AC") == 0) {
+    strcpy(text, "AC ");
+  } else if (strcmp(device, "HUMIDIFIER") == 0) {
+    strcpy(text, "HUM ");
+  } else if (strcmp(device, "VENT_FAN") == 0) {
+    strcpy(text, "WND ");
+  } else {
+    strcpy(text, "DEV ");
+  }
+
+  if (strcmp(desired, "ON") == 0) {
+    strcat(text, "ON");
+  } else if (strcmp(desired, "OFF") == 0) {
+    strcat(text, "OFF");
+  } else {
+    strcat(text, "?");
+  }
+
+  // Aktiviraj overlay
+  showActuatorOverlay(text);
+}
+
+
 void setup() {
   Serial.begin(9600);
   delay(1000);
@@ -766,12 +895,23 @@ void setup() {
   Serial.println("MQTT povezan!");
   mqttClient.setId(SENSOR_NAME);
 
+  // MQTT callback + subscribe za actuators topic
+  mqttClient.onMessage(onMqttMessage);
+  mqttClient.subscribe(MQTT_TOPIC_ACTUATORS);
+
   drawArmedScreen();
 }
 
 void loop() {
   // Održava MQTT konekciju (ping, keep-alive)
   mqttClient.poll();
+
+  // Ako je aktivan overlay za komandu, drži ga 3 sekunde i pauziraj ostalo
+  if (actuatorOverlayActive) {
+    updateActuatorOverlay();
+    delay(20);
+    return;
+  }
 
   switch (alarmState) {
     case ARMED:

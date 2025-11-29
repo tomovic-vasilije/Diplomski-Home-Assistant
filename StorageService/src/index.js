@@ -13,6 +13,7 @@ const MONGO_DB = process.env.MONGO_DB;
 const RAW_COLLECTION = process.env.RAW_COLLECTION;
 const AVG_COLLECTION = process.env.AVG_COLLECTION;
 const SEC_COLLECTION = process.env.SEC_COLLECTION;
+const COMMANDS_COLLECTION = process.env.COMMANDS_COLLECTION;
 
 const SUBJECT_RAW = process.env.SUBJECT_RAW;               // sensor.raw.>
 const SUBJECT_AVG = process.env.SUBJECT_AVG;               // sensor.avg.>
@@ -26,6 +27,7 @@ let client;  // Mongo client
 let rawCol;
 let avgCol;
 let secCol;
+let cmdCol;
 
 // helper da sigurno napravimo Date
 function toDateOrNull(value) {
@@ -44,6 +46,7 @@ async function main() {
   console.log(`  RAW_COLLECTION=${RAW_COLLECTION}`);
   console.log(`  AVG_COLLECTION=${AVG_COLLECTION}`);
   console.log(`  SEC_COLLECTION=${SEC_COLLECTION}`);
+  console.log(`  COMMANDS_COLLECTION=${COMMANDS_COLLECTION}`);
   console.log(`  SUBJECT_RAW=${SUBJECT_RAW}`);
   console.log(`  SUBJECT_AVG=${SUBJECT_AVG}`);
   console.log(`  SUBJECT_SECURITY=${SUBJECT_SECURITY}`);
@@ -59,6 +62,7 @@ async function main() {
   rawCol = db.collection(RAW_COLLECTION);
   avgCol = db.collection(AVG_COLLECTION);
   secCol = db.collection(SEC_COLLECTION);
+  cmdCol = db.collection(COMMANDS_COLLECTION);
 
   // 3) Sub na RAW podatke (sensor.raw.<sensor_name>)
   subscribeNATS(nc, SUBJECT_RAW, async (msg) => {
@@ -248,6 +252,22 @@ async function main() {
     }
   });
 
+  app.get("/api/commands/latest", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit, 50);
+
+      const docs = await cmdCol
+        .find({})
+        .sort({ ts_server: -1 })   // poslednje komande prve
+        .limit(limit)
+        .toArray();
+
+      res.json(docs);
+    } catch (err) {
+      console.error("[storage] /api/commands/latest error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   app.listen(PORT, () => {
     console.log(`[storage] HTTP API listening on http://localhost:${PORT}`);
