@@ -42,7 +42,6 @@ class NatsPublisher:
       print("[nats] Closed.", flush=True)
 
   def publish(self, subject: str, payload: dict):
-    """Thread-safe: ubaci zahtev u queue; async nit će ga poslati na NATS."""
     self._queue.put((subject, payload))
 
   def stop(self):

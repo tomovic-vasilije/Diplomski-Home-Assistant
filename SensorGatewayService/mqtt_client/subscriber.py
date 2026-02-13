@@ -42,7 +42,7 @@ class MqttWorker:
   def _on_message(self, client, userdata, msg):
     try:
       payload = json.loads(msg.payload.decode("utf-8"))
-      # delegiramo SensorGatewayService-u (ingest_measure ili ingest_security_event)
+    
       self.on_measure(payload)
 
       print(f"[mqtt] Payload from {msg.topic}: {payload}", flush=True)

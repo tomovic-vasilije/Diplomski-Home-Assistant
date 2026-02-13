@@ -201,7 +201,7 @@ async function main() {
 
       const docs = await rawCol
         .find(query)
-        .sort({ ts_server: -1 })   // najnoviji prvo
+        .sort({ ts_server: -1 })
         .limit(limit)
         .toArray();
 

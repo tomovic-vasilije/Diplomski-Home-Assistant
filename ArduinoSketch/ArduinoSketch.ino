@@ -121,7 +121,6 @@ void publishJsonToMqtt(const char* topic, StaticJsonDocument<256>& doc) {
   mqttClient.endMessage();
 }
 
-// Slanje senzor podataka na DATA topic (NORMAL stanje)
 void publishSensorData(float temperature, float humidity, float pressure) {
   StaticJsonDocument<256> doc;
 
@@ -376,9 +375,8 @@ void addDigit(uint8_t d) {
     int8_t userIdx = findUserIndexForPin(enteredPin);
 
     if (userIdx >= 0) {
-      // uspešna autentifikacija
       currentUserIndex = userIdx;
-      currentUserId = USER_IDS[userIdx];   // pokazivač na string u USER_IDS tabeli
+      currentUserId = USER_IDS[userIdx];   
 
       Serial.print("PIN tacan -> NORMAL stanje, korisnik: ");
       Serial.print("index=");
@@ -386,7 +384,7 @@ void addDigit(uint8_t d) {
       Serial.print(", id=");
       Serial.println(currentUserId);
 
-      publishEventAuthSuccess();           // MQTT event AUTH_SUCCESS
+      publishEventAuthSuccess();          
 
       alarmState = NORMAL;
       normalStateJustEntered = true;
@@ -395,11 +393,10 @@ void addDigit(uint8_t d) {
 
       showWelcomeScreen();
     } else {
-      // nijedan user nema ovaj PIN
       Serial.println("PIN pogresan!");
       failedAttempts++;
 
-      publishEventAuthFailed();            // MQTT event AUTH_FAILED
+      publishEventAuthFailed();            
 
       playMelody(errorMelody, errorDurations, ERROR_MELODY_LEN);
 
@@ -703,7 +700,6 @@ void handleNormalState() {
     normalStateJustEntered = false;
   }
 
-  // periodično očitavanje svakih ENV_SAMPLE_INTERVAL ms
   if (now - lastEnvSampleTime >= ENV_SAMPLE_INTERVAL) {
     lastEnvSampleTime = now;
 
@@ -711,7 +707,6 @@ void handleNormalState() {
     lastHum   = carrier.Env.readHumidity();
     lastPress = carrier.Pressure.readPressure();
 
-    // Ponovo slanje na MQTT DATA topic + Serial
     publishSensorData(lastTemp, lastHum, lastPress);
 
     int16_t newTempInt  = (int16_t)roundf(lastTemp);
@@ -895,7 +890,6 @@ void setup() {
   Serial.println("MQTT povezan!");
   mqttClient.setId(SENSOR_NAME);
 
-  // MQTT callback + subscribe za actuators topic
   mqttClient.onMessage(onMqttMessage);
   mqttClient.subscribe(MQTT_TOPIC_ACTUATORS);
 
@@ -903,10 +897,8 @@ void setup() {
 }
 
 void loop() {
-  // Održava MQTT konekciju (ping, keep-alive)
   mqttClient.poll();
 
-  // Ako je aktivan overlay za komandu, drži ga 3 sekunde i pauziraj ostalo
   if (actuatorOverlayActive) {
     updateActuatorOverlay();
     delay(20);
@@ -916,11 +908,9 @@ void loop() {
   switch (alarmState) {
     case ARMED:
       if (detectMovement()) {
-        // imamo pokret → šaljemo event + ulazimo u AUTH_COUNTDOWN
         publishEventMotionDetectedArmed();
         startAuthCountdown();
       } else {
-        // nema pokreta: mali delay da ne vrti loop prebrzo
         delay(20);
       }
       break;

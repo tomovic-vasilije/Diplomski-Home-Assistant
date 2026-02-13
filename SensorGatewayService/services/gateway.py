@@ -33,20 +33,6 @@ class SensorGatewayService:
   # -------------------- DATA topic: RAW + AVG --------------------
 
   def ingest_measure(self, measure: dict):
-    """
-    Poziva se iz MQTT data workera za svako merenje.
-
-    Očekuje ključeve:
-    - sensor_name (str)
-    - house_id (str)
-    - user_id (str ili None)
-    - state (str)  -- npr. "NORMAL"
-    - temperature (float)
-    - humidity (float)
-    - pressure (float)
-    - millis (int) -- millis sa Arduino uređaja
-    """
-
     if not self._running:
       return
 
@@ -55,7 +41,6 @@ class SensorGatewayService:
       hum = measure.get("humidity")
       press = measure.get("pressure")
 
-      # Bez ova 3 nema smisla avg, pa ignorišemo
       if temp is None or hum is None or press is None:
         print("[gateway] Skipping measure without full env data:", measure, flush=True)
         return
@@ -67,7 +52,6 @@ class SensorGatewayService:
 
       ts_server = datetime.now(timezone.utc).isoformat()
 
-      # 1) RAW → NATS
       raw_payload = {
         "sensor_name": sensor_name,
         "house_id": house_id,
@@ -84,7 +68,6 @@ class SensorGatewayService:
       self.nats.publish(raw_subject, raw_payload)
       print(f"[gateway] RAW -> {raw_subject}: {raw_payload}", flush=True)
 
-      # 2) AVG prozor (tumbling po server-satu)
       now_utc = datetime.now(timezone.utc)
 
       if self._window_started_at is None:
@@ -94,7 +77,6 @@ class SensorGatewayService:
       if elapsed >= self.window_sec and self._bucket:
         self._flush_avg()
 
-      # ubaci u trenutni prozor
       self._bucket.append({
         "ts_server": ts_server,
         "sensor_name": sensor_name,
@@ -108,10 +90,6 @@ class SensorGatewayService:
       print(f"[gateway] Error in ingest_measure: {e}. Payload={measure}", flush=True)
 
   def _flush_avg(self):
-    """
-    Izračunaj avg temperature/humidity/pressure iz bucket-a i
-    pošalji na SUBJECT_AVG_PREFIX.<sensor_name>.
-    """
     if not self._bucket:
       return
 
@@ -124,7 +102,6 @@ class SensorGatewayService:
     avg_hum = sum(hums) / count if count else None
     avg_press = sum(press) / count if count else None
 
-    # uzimamo sensor_name/house_id iz poslednjeg elementa (u praksi isti za sve)
     sensor_name = self._bucket[-1]["sensor_name"]
     house_id = self._bucket[-1]["house_id"]
 
@@ -151,20 +128,13 @@ class SensorGatewayService:
     subject = f"{self.subject_avg_prefix}.{sensor_name}"
     self.nats.publish(subject, out)
     print(f"[gateway] AVG -> {subject}: {out}", flush=True)
-
-    # reset prozora
+    
     self._bucket.clear()
     self._window_started_at = datetime.now(timezone.utc)
 
   # -------------------- EVENTS topic: SECURITY --------------------
 
   def ingest_security_event(self, event: dict):
-    """
-    Poziva se iz MQTT events workera za svaki security event.
-
-    Ne diramo sadržaj event-a (osim što dodamo ts_server),
-    samo prosleđujemo na SUBJECT_SECURITY_PREFIX.<sensor_name>.
-    """
     if not self._running:
       return
 
