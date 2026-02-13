@@ -5,7 +5,6 @@ import { createMongoClient } from "./mongo.js";
 
 dotenv.config();
 
-// ---- ENV promenljive ----
 const NATS_SERVER = process.env.NATS_SERVER;
 const MONGO_URL = process.env.MONGO_URL;
 const MONGO_DB = process.env.MONGO_DB;
@@ -15,21 +14,20 @@ const AVG_COLLECTION = process.env.AVG_COLLECTION;
 const SEC_COLLECTION = process.env.SEC_COLLECTION;
 const COMMANDS_COLLECTION = process.env.COMMANDS_COLLECTION;
 
-const SUBJECT_RAW = process.env.SUBJECT_RAW;               // sensor.raw.>
-const SUBJECT_AVG = process.env.SUBJECT_AVG;               // sensor.avg.>
-const SUBJECT_SECURITY = process.env.SUBJECT_SECURITY;     // sensor.security.>
+const SUBJECT_RAW = process.env.SUBJECT_RAW;             
+const SUBJECT_AVG = process.env.SUBJECT_AVG;               
+const SUBJECT_SECURITY = process.env.SUBJECT_SECURITY;     
 
 const PORT = parseInt(process.env.PORT ?? "4000", 10);
 
-// ---- globalne promenljive za konekcije ----
-let nc;      // NATS connection
-let client;  // Mongo client
+
+let nc;      
+let client;  
 let rawCol;
 let avgCol;
 let secCol;
 let cmdCol;
 
-// helper da sigurno napravimo Date
 function toDateOrNull(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -52,10 +50,8 @@ async function main() {
   console.log(`  SUBJECT_SECURITY=${SUBJECT_SECURITY}`);
   console.log(`  PORT=${PORT}`);
 
-  // 1) NATS konekcija
   nc = await createNatsConnection(NATS_SERVER);
 
-  // 2) Mongo konekcija
   client = await createMongoClient(MONGO_URL);
   const db = client.db(MONGO_DB);
 
@@ -64,11 +60,10 @@ async function main() {
   secCol = db.collection(SEC_COLLECTION);
   cmdCol = db.collection(COMMANDS_COLLECTION);
 
-  // 3) Sub na RAW podatke (sensor.raw.<sensor_name>)
   subscribeNATS(nc, SUBJECT_RAW, async (msg) => {
     try {
       const doc = {
-        ts_server: toDateOrNull(msg.ts_server), // timeField za raw_data
+        ts_server: toDateOrNull(msg.ts_server), 
         metadata: {
           sensor_name: msg.sensor_name,
           house_id: msg.house_id,
@@ -95,19 +90,17 @@ async function main() {
     }
   });
 
-  // 4) Sub na AVG podatke (sensor.avg.<sensor_name>)
   subscribeNATS(nc, SUBJECT_AVG, async (msg) => {
     try {
       const doc = {
-        // timeField za avg_data je t_end
         t_end: toDateOrNull(msg.t_end),
         t_start: toDateOrNull(msg.t_start),
         metadata: {
           sensor_name: msg.sensor_name,
           house_id: msg.house_id,
-          window: msg.window, // { type, size_sec }
+          window: msg.window, 
         },
-        avg: msg.avg,     // { temperature, humidity, pressure }
+        avg: msg.avg,   
         count: msg.count,
       };
 
@@ -124,11 +117,10 @@ async function main() {
     }
   });
 
-  // 5) Sub na SECURITY evente (sensor.security.<sensor_name>)
   subscribeNATS(nc, SUBJECT_SECURITY, async (msg) => {
     try {
       const doc = {
-        ts_server: toDateOrNull(msg.ts_server), // timeField za security_events
+        ts_server: toDateOrNull(msg.ts_server),
         metadata: {
           sensor_name: msg.sensor_name,
           house_id: msg.house_id,
@@ -140,7 +132,6 @@ async function main() {
         reason: msg.reason,
         failed_attempts: msg.failed_attempts,
         millis: msg.millis,
-        // ostalo ako postoji (možeš kasnije da proširiš)
       };
 
       await secCol.insertOne(doc);
@@ -157,10 +148,8 @@ async function main() {
     }
   });
 
-  // 6) HTTP API za health check (i kasnije za Grafanu)
+  // HTTP API za Grafanu
   const app = express();
-
-  // --------- Helperi za API (Grafana) ---------
 
   // parsira limit query param; ako je loš ili nema, vrati default
   function parseLimit(qLimit, defaultValue) {
@@ -169,7 +158,6 @@ async function main() {
     return n;
   }
 
-  // zajednički filter za sensor_name / house_id
   function buildCommonQuery(req) {
     const query = {};
 
@@ -189,8 +177,6 @@ async function main() {
   app.get("/", (req, res) => {
     res.json({ status: "ok" });
   });
-
-  // ovde ćemo kasnije dodati /api/raw, /api/avg, /api/security za Grafanu
 
   // --------- RAW data: /api/raw/latest ---------
   // Primer: /api/raw/latest?limit=100&sensor_name=MKR1010_WiFi&house_id=house_1
@@ -221,7 +207,7 @@ async function main() {
 
       const docs = await avgCol
         .find(query)
-        .sort({ t_end: -1 })       // koristimo t_end kao "kraj prozora"
+        .sort({ t_end: -1 })
         .limit(limit)
         .toArray();
 
@@ -241,7 +227,7 @@ async function main() {
 
       const docs = await secCol
         .find(query)
-        .sort({ ts_server: -1 })   // najnoviji eventovi
+        .sort({ ts_server: -1 })  
         .limit(limit)
         .toArray();
 
@@ -258,7 +244,7 @@ async function main() {
 
       const docs = await cmdCol
         .find({})
-        .sort({ ts_server: -1 })   // poslednje komande prve
+        .sort({ ts_server: -1 })  
         .limit(limit)
         .toArray();
 

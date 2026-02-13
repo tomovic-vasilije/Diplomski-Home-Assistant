@@ -117,20 +117,15 @@ public class MqttCommandWorker : BackgroundService
 
         if (isKnown && currentState == desiredOn)
         {
-            // stanje se ne menja → ignoriši (ni u bazu, ni ka arduinu)
             _logger.LogInformation("[cmd] Ignored command for {Key}, state unchanged ({State}).", key, desiredOn ? "ON" : "OFF");
-            // await _repository.InsertCommandAsync(msg, desiredOn, ignored: true, ct); // ako baš nećeš ni u bazu, ovo možeš da obrišeš
             return;
         }
 
-        // ažuriraj stanje
         _deviceStates[key] = desiredOn;
         _logger.LogInformation("[cmd] State updated for {Key} => {State}", key, desiredOn ? "ON" : "OFF");
 
-        // upiši u bazu
         await _repository.InsertCommandAsync(msg, desiredOn, ct);
 
-        // prosledi arduinu
         await PublishToArduinoAsync(msg, desiredOn, ct);
     }
 

@@ -8,8 +8,6 @@
 #include "secrets.h"
 #include "consts.h"
 
-// ------------------------ Globalne promenljive ------------------------
-
 MKRIoTCarrier carrier;
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
@@ -24,10 +22,10 @@ EnvPage currentPage = PAGE_TEMP;
 unsigned long lastEnvSampleTime = 0;
 bool normalStateJustEntered = false;
 
-// IMU (žiroskop)
+// IMU
 float Gx, Gy, Gz;
 
-// Auth countdown (tajmer, beep, prikaz)
+// Auth countdown
 unsigned long authStartTime = 0;
 int lastDisplayedSeconds = -1;
 unsigned long lastBeepTime = 0;
@@ -41,18 +39,17 @@ bool actuatorOverlayActive = false;
 unsigned long actuatorOverlayStart = 0;
 char actuatorOverlayText[16];   // npr. "AC ON", "HUM OFF", "WND ON"
 
-// Trenutno unet PIN (do 4 cifre)
+// Trenutno unet PIN
 uint8_t enteredPin[PIN_LENGTH];
 uint8_t enteredLength = 0;
 
 // Broj neuspešnih pokušaja PIN-a
 uint8_t failedAttempts = 0;
 
-// Boje za LED traku
+// Boje za LED
 uint32_t colorRed, colorGreen, colorBlue, colorBlack;
 
-// ------------------------ Melodije (note + trajanje) ------------------------
-
+// Melodije
 const uint16_t successMelody[] = {
   NOTE_E6, NOTE_G6, NOTE_C7, NOTE_G6
 };
@@ -96,7 +93,7 @@ void playMelody(const uint16_t *melody, const uint8_t *durations, uint8_t length
 
 // Kratak beep za odbrojavanje (svake sekunde u AUTH_COUNTDOWN)
 void playShortCountdownBeep() {
-  uint16_t noteDuration = 1000 / 16;   // šesnaestinka
+  uint16_t noteDuration = 1000 / 16;
   carrier.Buzzer.sound(NOTE_A6);
   delay(noteDuration);
   uint16_t pauseBetweenNotes = noteDuration * 0.30f;
@@ -130,7 +127,7 @@ void publishSensorData(float temperature, float humidity, float pressure) {
   if (currentUserId != NULL) {
     doc["user_id"] = currentUserId;
   } else {
-    doc["user_id"] = nullptr; // JSON null
+    doc["user_id"] = nullptr; 
   }
 
   doc["state"] = "NORMAL";
@@ -142,7 +139,7 @@ void publishSensorData(float temperature, float humidity, float pressure) {
   publishJsonToMqtt(MQTT_TOPIC_DATA, doc);
 }
 
-// Popunjavanje zajedničkih polja za EVENT JSON
+// Zajednička polja za EVENT JSON
 void fillCommonEvent(StaticJsonDocument<256>& doc, const char* eventType) {
   doc["sensor_name"] = SENSOR_NAME;
   doc["house_id"] = HOUSE_ID;
@@ -156,8 +153,6 @@ void fillCommonEvent(StaticJsonDocument<256>& doc, const char* eventType) {
   doc["event_type"] = eventType;
   doc["millis"] = millis();
 }
-
-// --------------- Pojedinačni event publish-eri ----------------
 
 // Pokret detektovan u ARMED → prelaz u AUTH_COUNTDOWN
 void publishEventMotionDetectedArmed() {
@@ -273,7 +268,6 @@ void drawArmedScreen() {
   carrier.display.setCursor(60, 90);
   carrier.display.print("ARMED");
 
-  // ARMED = mrak na LED
   carrier.leds.fill(colorBlack, 0, 5);
   carrier.leds.show();
 }
@@ -289,7 +283,6 @@ void drawIntruderScreen() {
   carrier.display.print("DETECTED!");
 }
 
-// Prelazak u AUTH_COUNTDOWN stanje
 void startAuthCountdown() {
   alarmState = AUTH_COUNTDOWN;
   authStartTime = millis();
@@ -331,7 +324,7 @@ void showWelcomeScreen() {
     delay(250);
   }
 
-  delay(2000);  // ~2 sekunde welcome
+  delay(2000);  
 
   carrier.leds.fill(colorBlack, 0, 5);
   carrier.leds.show();
@@ -352,10 +345,10 @@ int8_t findUserIndexForPin(const uint8_t pinDigits[PIN_LENGTH]) {
       }
     }
     if (match) {
-      return (int8_t)userIdx;   // našli smo user-a
+      return (int8_t)userIdx;   
     }
   }
-  return -1;                    // nijedan se ne poklapa
+  return -1;                    
 }
 
 // Dodaj jednu cifru u PIN i proveri kada ima 4 cifre
@@ -431,8 +424,8 @@ void updateAuthCountdown() {
 
   // Countdown istekao → INTRUDER
   if (remaining <= 0 && alarmState == AUTH_COUNTDOWN) {
-    publishEventAuthTimeout();     // MQTT AUTH_TIMEOUT
-    publishEventIntruderAlarm();   // MQTT INTRUDER_ALARM
+    publishEventAuthTimeout();     
+    publishEventIntruderAlarm();   
 
     alarmState = INTRUDER;
     Serial.println("Isteklo vreme -> INTRUDER");
@@ -519,8 +512,6 @@ void updateIntruderAlarm() {
 //             ENV EKRAN: STATIC (logo + naslov) + VALUE (broj)
 // ======================================================================
 
-// TEMP
-
 void drawTemperatureStatic() {
   carrier.display.fillScreen(ST77XX_BLACK);
   carrier.display.setTextSize(3);
@@ -532,7 +523,6 @@ void drawTemperatureStatic() {
 }
 
 void drawTemperatureValue(int16_t tempInt) {
-  // obriši samo donji deo (gde piše broj + C)
   carrier.display.fillRect(40, 170, 200, 60, ST77XX_BLACK);
 
   carrier.display.setTextSize(3);
@@ -541,8 +531,6 @@ void drawTemperatureValue(int16_t tempInt) {
   carrier.display.print(tempInt);
   carrier.display.print(" C");
 }
-
-// HUMIDITY
 
 void drawHumidityStatic() {
   carrier.display.fillScreen(ST77XX_BLACK);
@@ -563,8 +551,6 @@ void drawHumidityValue(int16_t humInt) {
   carrier.display.print(humInt);
   carrier.display.print(" %");
 }
-
-// PRESSURE
 
 void drawPressureStatic() {
   carrier.display.fillScreen(ST77XX_BLACK);
@@ -587,7 +573,6 @@ void drawPressureValue(int16_t pressInt) {
   carrier.display.print("kPa");
 }
 
-// Izbor statičke strane na osnovu currentPage
 void drawEnvStaticPage(EnvPage page) {
   switch (page) {
     case PAGE_TEMP:
@@ -602,7 +587,6 @@ void drawEnvStaticPage(EnvPage page) {
   }
 }
 
-// Izbor value dela na osnovu currentPage
 void drawEnvValue(EnvPage page, int16_t tempInt, int16_t humInt, int16_t pressInt) {
   switch (page) {
     case PAGE_TEMP:
@@ -618,21 +602,18 @@ void drawEnvValue(EnvPage page, int16_t tempInt, int16_t humInt, int16_t pressIn
 }
 
 void showActuatorOverlay(const char* text) {
-  // upamti tekst
   strncpy(actuatorOverlayText, text, sizeof(actuatorOverlayText) - 1);
   actuatorOverlayText[sizeof(actuatorOverlayText) - 1] = '\0';
 
   actuatorOverlayActive = true;
   actuatorOverlayStart = millis();
 
-  // ekran
   carrier.display.fillScreen(ST77XX_BLACK);
   carrier.display.setTextColor(ST77XX_WHITE);
   carrier.display.setTextSize(4);
   carrier.display.setCursor(40, 90);
   carrier.display.print(actuatorOverlayText);
 
-  // plava LED traka dok prikaz traje
   carrier.leds.fill(colorBlue, 0, 5);
   carrier.leds.show();
 }
@@ -640,23 +621,19 @@ void showActuatorOverlay(const char* text) {
 void updateActuatorOverlay() {
   if (!actuatorOverlayActive) return;
 
-  if (millis() - actuatorOverlayStart >= 3000UL) {  // 3 sekunde
+  if (millis() - actuatorOverlayStart >= 3000UL) {
     actuatorOverlayActive = false;
 
-    // ugasi plavu traku
     carrier.leds.fill(colorBlack, 0, 5);
     carrier.leds.show();
 
-    // vrati se na "normalan" prikaz, zavisi od stanja
     switch (alarmState) {
       case ARMED:
         drawArmedScreen();
         break;
       case AUTH_COUNTDOWN:
-        // countdown ekran će se osvežiti u updateAuthCountdown()
         break;
       case NORMAL:
-        // neka NORMAL izgradi env ekran ispočetka
         normalStateJustEntered = true;
         break;
       case INTRUDER:
@@ -677,20 +654,17 @@ void handleNormalState() {
 
   unsigned long now = millis();
 
-  // prvi ulazak u NORMAL – očitaj senzore i prikaži temperaturu
   if (normalStateJustEntered) {
-    currentPage = PAGE_TEMP; // kreni od Temperature
+    currentPage = PAGE_TEMP; 
 
     lastTemp  = carrier.Env.readTemperature();
     lastHum   = carrier.Env.readHumidity();
     lastPress = carrier.Pressure.readPressure();
 
-    // float za log / MQTT, int za prikaz
     tempInt  = (int16_t)roundf(lastTemp);
     humInt   = (int16_t)roundf(lastHum);
     pressInt = (int16_t)roundf(lastPress);
 
-    // Slanje na MQTT DATA topic + ispis JSON-a u Serial
     publishSensorData(lastTemp, lastHum, lastPress);
 
     drawEnvStaticPage(currentPage);
@@ -739,7 +713,6 @@ void handleNormalState() {
     uint8_t gesture = carrier.Light.readGesture();
 
     if (gesture == LEFT) {
-      // TEMP <- HUM <- PRESS <- TEMP ...
       if (currentPage == PAGE_TEMP) {
         currentPage = PAGE_PRESSURE;
       } else {
@@ -749,7 +722,6 @@ void handleNormalState() {
       drawEnvValue(currentPage, tempInt, humInt, pressInt);
     }
     else if (gesture == RIGHT) {
-      // TEMP -> HUM -> PRESS -> TEMP ...
       if (currentPage == PAGE_PRESSURE) {
         currentPage = PAGE_TEMP;
       } else {
@@ -764,18 +736,16 @@ void handleNormalState() {
       // pošalji event ko je "zaključao" kuću
       publishEventArmedByUser();
 
-      // resetuj trenutnog user-a
       currentUserIndex = -1;
       currentUserId = NULL;
 
       alarmState = ARMED;
       drawArmedScreen();
-      // pošto smo promenili stanje, nema više posla u NORMAL u ovoj iteraciji
+      
       return;
     }
   }
 
-  // mali delay da ne cepa CPU
   delay(50);
 }
 
@@ -840,7 +810,6 @@ void onMqttMessage(int messageSize) {
     strcat(text, "?");
   }
 
-  // Aktiviraj overlay
   showActuatorOverlay(text);
 }
 

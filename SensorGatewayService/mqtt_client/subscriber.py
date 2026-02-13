@@ -18,7 +18,6 @@ class MqttWorker:
     self.topic = topic
     self.on_measure = on_measure
 
-    # unikatan client_id (po defaultu na osnovu topica)
     cid = client_id or f"sensor-gateway-{topic}".replace("/", "_")
     self.client = mqtt.Client(client_id=cid)
 
@@ -28,8 +27,6 @@ class MqttWorker:
 
     self._started = False
     self._lock = threading.Lock()
-
-  # === MQTT callbacks ===
 
   def _on_connect(self, client, userdata, flags, rc):
     if rc == 0:
@@ -51,8 +48,6 @@ class MqttWorker:
 
   def _on_disconnect(self, client, userdata, rc):
     print(f"[mqtt] Disconnected, rc={rc}", flush=True)
-
-  # === lifecycle ===
 
   def start(self):
     with self._lock:
